@@ -1,0 +1,247 @@
+name: agc2-prerelease
+
+on:
+  workflow_dispatch:
+    inputs:
+      commitHash:
+        description: "webrtc-audio-processing commit hash (leave empty for default branch HEAD)"
+        default: ""
+        required: false
+      version:
+        description: "release version (optional, default: current + 1)"
+        default: ""
+        required: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  pick-runner:
+    runs-on: ubuntu-slim
+    outputs:
+      runner: ${{ steps.pick-runner.outputs.runner }}
+      macos-runner: ${{ steps.pick-runner.outputs.macos-runner }}
+    steps:
+      - name: Determine which runner to use
+        id: pick-runner
+        env:
+          RUNNER: ${{ vars.RUNNER }}
+          MACOS_RUNNER: ${{ vars.MACOS_RUNNER }}
+        run: |
+          if [ -z "$RUNNER" ]; then
+            RUNNER="ubuntu-latest"
+          fi
+          if [ -z "$MACOS_RUNNER" ]; then
+            MACOS_RUNNER="macos-latest"
+          fi
+          echo "runner=$RUNNER" >> $GITHUB_OUTPUT
+          echo "macos-runner=$MACOS_RUNNER" >> $GITHUB_OUTPUT
+
+  prepare:
+    needs: pick-runner
+    runs-on: ${{ fromJSON(needs.pick-runner.outputs.runner) }}
+    outputs:
+      commit: ${{ steps.version.outputs.commit }}
+      webrtc_version: ${{ steps.version.outputs.webrtc_version }}
+      prerelease_tag: ${{ steps.version.outputs.prerelease_tag }}
+      release_tag: ${{ steps.version.outputs.release_tag }}
+    steps:
+      - uses: actions/checkout@v6
+      - id: version
+        run: |
+          set -euo pipefail
+          if [ -n "${{ github.event.inputs.commitHash }}" ]; then
+            commit="${{ github.event.inputs.commitHash }}"
+          else
+            commit="$(git ls-remote https://github.com/Entertech/webrtc-audio-processing HEAD | awk '{print $1}')"
+          fi
+          AGC2_COMMIT="$commit" AGC2_VERSION="${{ github.event.inputs.version }}" python3 - <<'PY'
+          import os
+          from pathlib import Path
+          path = Path("build/VERSION")
+          data = {}
+          for line in path.read_text().splitlines():
+            if not line.strip():
+              continue
+            key, val = line.split("=", 1)
+            data[key] = val
+          webrtc_version = data["WEBRTC_VERSION"]
+          override_version = os.environ.get("AGC2_VERSION", "").strip()
+          if override_version:
+            new_webrtc_version = override_version
+          else:
+            parts = webrtc_version.split(".")
+            parts[-1] = str(int(parts[-1]) + 1)
+            new_webrtc_version = ".".join(parts)
+          new_build_version = f"{new_webrtc_version}.0"
+          commit = os.environ["AGC2_COMMIT"]
+          parts = new_webrtc_version.split(".")
+          readable_version = f"M{parts[0]}.{parts[1]}@{{#{parts[2]}}}"
+          print(f"commit={commit}")
+          print(f"build_version={new_build_version}")
+          print(f"webrtc_version={new_webrtc_version}")
+          print(f"prerelease_tag=v{new_webrtc_version}-pre")
+          print(f"release_tag=v{new_webrtc_version}")
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as f:
+            f.write(f"commit={commit}\n")
+            f.write(f"webrtc_version={new_webrtc_version}\n")
+            f.write(f"prerelease_tag=v{new_webrtc_version}-pre\n")
+            f.write(f"release_tag=v{new_webrtc_version}\n")
+          with path.open("w", encoding="utf-8") as f:
+            f.write(f"WEBRTC_BUILD_VERSION={new_build_version}\n")
+            f.write(f"WEBRTC_VERSION={new_webrtc_version}\n")
+            f.write(f"WEBRTC_READABLE_VERSION={readable_version}\n")
+            f.write(f"WEBRTC_COMMIT={commit}\n")
+          PY
+      - name: Upload VERSION artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: version-file
+          path: build/VERSION
+
+  build-apple:
+    runs-on: ${{ fromJSON(needs.pick-runner.outputs.macos-runner) }}
+    needs: [pick-runner, prepare]
+    defaults:
+      run:
+        working-directory: ./build
+    steps:
+      - uses: actions/checkout@v6
+      - name: Cache depot tools and CIPD
+        uses: actions/cache@v5
+        with:
+          path: |
+            build/_source/agc2_apple/depot_tools
+            build/_source/agc2_apple/.cipd
+            ~/.vpython-root
+          key: agc2-macos-deps-${{ runner.os }}-v1
+          restore-keys: |
+            agc2-macos-deps-${{ runner.os }}-
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: 16.4
+      - name: Download VERSION artifact
+        uses: actions/download-artifact@v7
+        with:
+          name: version-file
+          path: build
+      - name: Build AGC2 Apple
+        run: |
+          python3 run.py build agc2_apple --webrtc-fetch
+          python3 run.py package agc2_apple
+      - name: Zip xcframework
+        run: |
+          cd _package/agc2_apple
+          ditto -c -k --sequesterRsrc --keepParent AGC2Capi.xcframework AGC2Capi.xcframework.zip
+          swift package compute-checksum AGC2Capi.xcframework.zip > AGC2Capi.xcframework.zip.checksum
+      - name: Upload Apple artifacts
+        uses: actions/upload-artifact@v6
+        with:
+          name: agc2-apple
+          path: |
+            build/_package/agc2_apple/AGC2Capi.xcframework.zip
+            build/_package/agc2_apple/AGC2Capi.xcframework.zip.checksum
+
+  build-android:
+    runs-on: ${{ fromJSON(needs.pick-runner.outputs.runner) }}
+    needs: [pick-runner, prepare]
+    defaults:
+      run:
+        working-directory: ./build
+    steps:
+      - uses: actions/checkout@v6
+      - name: Cache depot tools and CIPD
+        uses: actions/cache@v5
+        with:
+          path: |
+            build/_source/agc2_android/depot_tools
+            build/_source/agc2_android/.cipd
+            ~/.vpython-root
+          key: agc2-linux-deps-${{ runner.os }}-v1
+          restore-keys: |
+            agc2-linux-deps-${{ runner.os }}-
+      - uses: actions/setup-java@v5
+        with:
+          distribution: "temurin"
+          java-version: "21"
+      - name: Download VERSION artifact
+        uses: actions/download-artifact@v7
+        with:
+          name: version-file
+          path: build
+      - name: Build AGC2 Android
+        run: |
+          python3 run.py build agc2_android --webrtc-fetch
+          python3 run.py package agc2_android
+      - name: Upload Android artifacts
+        uses: actions/upload-artifact@v6
+        with:
+          name: agc2-android
+          path: build/_package/agc2_android/aar/agc2capi.aar
+
+  prerelease:
+    runs-on: ${{ fromJSON(needs.pick-runner.outputs.runner) }}
+    needs: [pick-runner, prepare, build-apple, build-android]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/download-artifact@v7
+        with:
+          name: agc2-apple
+          path: artifacts
+      - uses: actions/download-artifact@v7
+        with:
+          name: agc2-android
+          path: artifacts
+      - name: Download VERSION artifact
+        uses: actions/download-artifact@v7
+        with:
+          name: version-file
+          path: build
+      - id: checksum
+        run: |
+          checksum="$(cat artifacts/AGC2Capi.xcframework.zip.checksum)"
+          echo "checksum=$checksum" >> "$GITHUB_OUTPUT"
+      - name: Create prerelease
+        uses: softprops/action-gh-release@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ needs.prepare.outputs.prerelease_tag }}
+          name: ${{ needs.prepare.outputs.prerelease_tag }}
+          prerelease: true
+          files: |
+            artifacts/AGC2Capi.xcframework.zip
+            artifacts/AGC2Capi.xcframework.zip.checksum
+            artifacts/agc2capi.aar
+      - name: Update Package.swift
+        run: |
+          python3 - <<'PY'
+          import os
+          import re
+          from pathlib import Path
+          url = f"https://github.com/Entertech/webrtc-audio-processing-build/releases/download/{os.environ['TAG']}/AGC2Capi.xcframework.zip"
+          checksum = os.environ["CHECKSUM"]
+          path = Path("Package.swift")
+          text = path.read_text()
+          text = re.sub(r'url:\s*"[^"]+"', f'url: "{url}"', text)
+          text = re.sub(r'checksum:\s*"[^"]+"', f'checksum: "{checksum}"', text)
+          path.write_text(text)
+          PY
+        env:
+          TAG: ${{ needs.prepare.outputs.release_tag }}
+          CHECKSUM: ${{ steps.checksum.outputs.checksum }}
+      - name: Create PR
+        uses: peter-evans/create-pull-request@v8
+        with:
+          add-paths: |
+            Package.swift
+            build/VERSION
+          branch: release/v${{ needs.prepare.outputs.webrtc_version }}
+          title: "Release v${{ needs.prepare.outputs.webrtc_version }}"
+          body: |
+            - Update build/VERSION for AGC2 artifacts
+            - Update Package.swift with prerelease URL and checksum
+          labels: |
+            agc2-release
+          commit-message: "Release v${{ needs.prepare.outputs.webrtc_version }}"

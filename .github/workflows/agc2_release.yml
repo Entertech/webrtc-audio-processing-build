@@ -1,0 +1,118 @@
+name: agc2-release
+
+on:
+  pull_request:
+    types: [closed]
+
+permissions:
+  contents: write
+  pull-requests: read
+
+jobs:
+  pick-runner:
+    runs-on: ubuntu-slim
+    outputs:
+      runner: ${{ steps.pick-runner.outputs.runner }}
+    steps:
+      - name: Determine which runner to use
+        id: pick-runner
+        env:
+          RUNNER: ${{ vars.RUNNER }}
+        run: |
+          if [ -z "$RUNNER" ]; then
+            RUNNER="ubuntu-latest"
+          fi
+          echo "runner=$RUNNER" >> $GITHUB_OUTPUT
+
+  cleanup-prerelease:
+    if: >
+      github.event.pull_request.merged == false &&
+      contains(github.event.pull_request.labels.*.name, 'agc2-release')
+    runs-on: ${{ fromJSON(needs.pick-runner.outputs.runner) }}
+    needs: pick-runner
+    steps:
+      - name: Delete prerelease for closed PR
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_BRANCH: ${{ github.event.pull_request.head.ref }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          version="${PR_BRANCH#release/v}"
+          tag="v${version}-pre"
+          if [ "$version" = "$PR_BRANCH" ]; then
+            echo "Branch name not in expected format; skipping prerelease deletion."
+            exit 0
+          fi
+          gh release delete "$tag" --cleanup-tag -y
+
+  release:
+    if: >
+      github.event.pull_request.merged == true &&
+      contains(github.event.pull_request.labels.*.name, 'agc2-release')
+    runs-on: ${{ fromJSON(needs.pick-runner.outputs.runner) }}
+    needs: pick-runner
+    steps:
+      - uses: actions/checkout@v6
+      - id: version
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path("build/VERSION")
+          data = {}
+          for line in path.read_text().splitlines():
+            if not line.strip():
+              continue
+            key, val = line.split("=", 1)
+            data[key] = val
+          build_version = data["WEBRTC_BUILD_VERSION"]
+          webrtc_version = data["WEBRTC_VERSION"]
+          with open(Path("version.env"), "w", encoding="utf-8") as f:
+            f.write(f"BUILD_VERSION={build_version}\n")
+            f.write(f"WEBRTC_VERSION={webrtc_version}\n")
+            f.write(f"PRERELEASE_TAG=v{webrtc_version}-pre\n")
+            f.write(f"RELEASE_TAG=v{webrtc_version}\n")
+          PY
+          cat version.env >> "$GITHUB_ENV"
+      - name: Download prerelease assets
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release download "$PRERELEASE_TAG" --pattern "AGC2Capi.xcframework.zip" --pattern "AGC2Capi.xcframework.zip.checksum" --pattern "agc2capi.aar"
+      - uses: actions/setup-java@v5
+        with:
+          distribution: "temurin"
+          java-version: "21"
+      - uses: gradle/actions/setup-gradle@v5
+      - name: Publish AAR to Maven Central
+        env:
+          ORG_GRADLE_PROJECT_mavenCentralUsername: ${{ vars.MAVEN_CENTRAL_USERNAME }}
+          ORG_GRADLE_PROJECT_mavenCentralPassword: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
+          ORG_GRADLE_PROJECT_signingInMemoryKey: ${{ secrets.SIGNING_IN_MEMORY_KEY }}
+          ORG_GRADLE_PROJECT_signingInMemoryKeyId: ${{ secrets.SIGNING_IN_MEMORY_KEY_ID }}
+          ORG_GRADLE_PROJECT_signingInMemoryKeyPassword: ${{ secrets.SIGNING_IN_MEMORY_KEY_PASSWORD }}
+        run: |
+          AGC2_VERSION="${WEBRTC_VERSION}" \
+          AGC2_AAR_PATH="${GITHUB_WORKSPACE}/agc2capi.aar" \
+          gradle -p maven publishToMavenCentral
+      - name: Create release tag
+        run: |
+          git tag "$RELEASE_TAG"
+          git push origin "$RELEASE_TAG"
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          name: ${{ env.RELEASE_TAG }}
+          prerelease: false
+          files: |
+            AGC2Capi.xcframework.zip
+            AGC2Capi.xcframework.zip.checksum
+            agc2capi.aar
+      - name: Delete prerelease
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release delete "$PRERELEASE_TAG" --cleanup-tag -y
