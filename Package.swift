@@ -16,8 +16,8 @@ let package = Package(
     targets: [
         .binaryTarget(
             name: "AGC2Capi",
-            url: "https://github.com/Entertech/webrtc-audio-processing-build/releases/download/v0.0.0-pre/AGC2Capi.xcframework.zip",
-            checksum: "0000000000000000000000000000000000000000000000000000000000000000"
+            url: "https://github.com/Entertech/webrtc-audio-processing-build/releases/download/v137.7151.11.1/AGC2Capi.xcframework.zip",
+            checksum: "0b9c10bcca388fe79a7c4b8c1754cbba4a720c82b3ce9d9852821cb7ac2e4b79"
         )
     ]
 )
