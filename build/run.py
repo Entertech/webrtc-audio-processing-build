@@ -601,7 +601,8 @@ def build_webrtc_android(
         test=False,
         gen=False, gen_force=False,
         nobuild=False, nobuild_aar=False,
-        variant='webrtc'):
+        variant='webrtc',
+        target='android'):
     variant_config = ANDROID_VARIANTS.get(variant)
     if variant_config is None:
         raise Exception(f'Unknown Android variant: {variant}')
@@ -662,7 +663,7 @@ def build_webrtc_android(
             ]
             gn_gen(webrtc_src_dir, work_dir, gn_args, extra_gn_args)
         if not nobuild:
-            cmd(['autoninja', '-C', work_dir, *get_build_targets('android')])
+            cmd(['autoninja', '-C', work_dir, *get_build_targets(target)])
             ar = os.path.join(webrtc_src_dir, 'third_party/llvm-build/Release+Asserts/bin/llvm-ar')
             archive_objects(ar, os.path.join(work_dir, 'obj'), os.path.join(work_dir, f'{variant_config.lib_name}.a'))
         if test:
@@ -1218,14 +1219,12 @@ def main():
                 build_webrtc_ios(**build_webrtc_args,
                                  nobuild_framework=args.webrtc_nobuild_ios_framework,
                                  overlap_build_dir=args.webrtc_overlap_ios_build_dir)
-            elif args.target in ['android', 'android_prefixed']:
+            elif args.target in ['android', 'android_prefixed', 'android_export_audio']:
+                variant = 'export_audio' if args.target == 'android_export_audio' else 'webrtc'
                 build_webrtc_android(**build_webrtc_args,
                                      nobuild_aar=args.webrtc_nobuild_android_aar,
-                                     variant='webrtc')
-            elif args.target == 'android_export_audio':
-                build_webrtc_android(**build_webrtc_args,
-                                     nobuild_aar=args.webrtc_nobuild_android_aar,
-                                     variant='export_audio')
+                                     variant=variant,
+                                     target=args.target)
             elif args.target in ['apple', 'apple_prefixed', 'apple_export_audio']:
                 pass
             else:
