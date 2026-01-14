@@ -101,16 +101,6 @@ def add_path(path: str, is_after=False):
         os.environ['PATH'] = path + PATH_SEPARATOR + os.environ['PATH']
 
 
-def add_ninja_to_path(webrtc_src_dir: str):
-    ninja_dir = os.path.join(webrtc_src_dir, 'third_party', 'ninja')
-    ninja_bin = os.path.join(ninja_dir, 'ninja')
-    ninja_exe = os.path.join(ninja_dir, 'ninja.exe')
-    if os.path.exists(ninja_bin) or os.path.exists(ninja_exe):
-        add_path(ninja_dir)
-    else:
-        logging.warning('Ninja binary not found under %s', ninja_dir)
-
-
 def download(url: str, output_dir: Optional[str] = None, filename: Optional[str] = None) -> str:
     if filename is None:
         output_path = urllib.parse.urlparse(url).path.split('/')[-1]
@@ -191,6 +181,7 @@ PATCHES = {
     'apple_prefixed': [
         'apple_prefix.patch',
     ],
+    'agc2_apple': [],
     'windows_x86_64': [
         'add_license_dav1d.patch',
         'windows_add_deps.patch',
@@ -225,10 +216,6 @@ PATCHES = {
         'android_webrtc_version.patch',
         'fix_mocks.patch',
         'jni_prefix.patch'
-    ],
-    'agc2_apple': [
-        'add_license_dav1d.patch',
-        'fix_mocks.patch',
     ],
     'agc2_android': [
         'add_license_dav1d.patch',
@@ -460,32 +447,6 @@ ANDROID_VARIANTS = {
     ),
 }
 
-# Apple build variants configuration
-AppleVariant = collections.namedtuple('AppleVariant', [
-    'ios_archs',          # iOS architectures to build
-    'macos_archs',        # macOS architectures to build (empty for iOS-only)
-    'ninja_target',       # Ninja target to build
-    'output_name',        # Output library name
-    'xcframework_name',   # XCFramework output name
-    'archive_rel_path',   # Relative path to the archive in build dir (for thin archive)
-    'headers',            # Header files to include
-    'build_ios_framework',  # Whether to use build_ios_libs.sh for framework
-])
-
-APPLE_VARIANTS = {
-    'webrtc': AppleVariant(
-        ios_archs=['simulator:x64', 'simulator:arm64', 'device:arm64'],
-        macos_archs=[],
-        ninja_target=None,  # Uses default targets
-        output_name='webrtc',
-        xcframework_name='WebRTC.xcframework',
-        archive_rel_path=None,
-        headers=[],
-        build_ios_framework=True,
-    ),
-}
-
-
 def to_gn_args(gn_args: List[str], extra_gn_args: str) -> str:
     s = ' '.join(gn_args)
     if len(extra_gn_args) == 0:
@@ -498,14 +459,6 @@ def gn_gen(webrtc_src_dir: str, webrtc_build_dir: str, gn_args: List[str], extra
         args = ['gn', 'gen', webrtc_build_dir, '--args=' + to_gn_args(gn_args, extra_gn_args)]
         logging.info(' '.join(args))
         return cmd(args)
-
-
-def get_ios_deployment_target(webrtc_src_dir: str, device: str) -> str:
-    with cd(os.path.join(webrtc_src_dir, 'tools_webrtc', 'ios')):
-        return cmdcap(
-            ['python3', '-c',
-             f'from build_ios_libs import IOS_MINIMUM_DEPLOYMENT_TARGET; '
-             f'print(IOS_MINIMUM_DEPLOYMENT_TARGET["{device}"])'])
 
 
 def get_webrtc_version_info(version_info: VersionInfo):
@@ -917,7 +870,7 @@ def package_webrtc(source_dir, build_dir, package_dir, target,
 
     # ライセンス生成
     # License creation
-    if target in ['android', 'android_prefixed']:
+    if target in ['android', 'android_prefixed', 'agc2_android']:
         dirs = []
         for arch in ANDROID_ARCHS:
             dirs += [
@@ -1027,11 +980,11 @@ TARGETS = [
     'raspberry-pi-os_armv8',
     'android',
     'android_prefixed',
-    'ios',
     'agc2_android',
-    'agc2_apple',
+    'ios',
     'apple',
-    'apple_prefixed'
+    'apple_prefixed',
+    'agc2_apple'
 ]
 
 
@@ -1043,8 +996,7 @@ def check_target(target):
         return target in ['windows_x86_64', 'windows_arm64']
     elif platform.system() == 'Darwin':
         logging.info(f'OS: {platform.system()}')
-        return target in ('macos_x86_64', 'macos_arm64', 'ios',
-                          'agc2_apple', 'apple', 'apple_prefixed')
+        return target in ('macos_x86_64', 'macos_arm64', 'ios', 'apple', 'apple_prefixed', 'agc2_apple')
     elif platform.system() == 'Linux':
         release = read_version_file('/etc/os-release')
         os = release['NAME']
@@ -1231,8 +1183,6 @@ def main():
             get_webrtc(source_dir, patch_dir, commit, args.target,
                        webrtc_source_dir=webrtc_source_dir,
                        fetch=args.webrtc_fetch, force=args.webrtc_fetch_force)
-            webrtc_root = webrtc_source_dir if webrtc_source_dir else os.path.join(source_dir, 'webrtc')
-            add_ninja_to_path(os.path.join(webrtc_root, 'src'))
 
             # ビルド
             # Build
@@ -1267,15 +1217,11 @@ def main():
     if args.op == 'package':
         mkdir_p(package_dir)
         with cd(BASE_DIR):
-            if args.target in ['agc2_apple', 'agc2_android']:
-                # AGC2 packaging is handled by shell scripts
-                pass
-            else:
-                package_webrtc(source_dir, build_dir, package_dir, args.target,
-                               webrtc_source_dir=webrtc_source_dir,
-                               webrtc_build_dir=webrtc_build_dir,
-                               webrtc_package_dir=webrtc_package_dir,
-                               overlap_ios_build_dir=args.webrtc_overlap_ios_build_dir)
+            package_webrtc(source_dir, build_dir, package_dir, args.target,
+                           webrtc_source_dir=webrtc_source_dir,
+                           webrtc_build_dir=webrtc_build_dir,
+                           webrtc_package_dir=webrtc_package_dir,
+                           overlap_ios_build_dir=args.webrtc_overlap_ios_build_dir)
 
 
 if __name__ == '__main__':
