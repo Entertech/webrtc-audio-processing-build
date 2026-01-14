@@ -127,13 +127,10 @@ jobs:
           name: version-file
           path: build
       - name: Build AGC2 Apple
-        run: |
-          python3 run.py build agc2_apple --webrtc-fetch
-          python3 run.py package agc2_apple
-      - name: Zip xcframework
+        run: ./build.agc2_apple.sh
+      - name: Create checksum
         run: |
           cd _package/agc2_apple
-          ditto -c -k --sequesterRsrc --keepParent AGC2Capi.xcframework AGC2Capi.xcframework.zip
           swift package compute-checksum AGC2Capi.xcframework.zip > AGC2Capi.xcframework.zip.checksum
       - name: Upload Apple artifacts
         uses: actions/upload-artifact@v6
@@ -171,9 +168,7 @@ jobs:
           name: version-file
           path: build
       - name: Build AGC2 Android
-        run: |
-          python3 run.py build agc2_android --webrtc-fetch
-          python3 run.py package agc2_android
+        run: ./build.agc2_android.sh
       - name: Upload Android artifacts
         uses: actions/upload-artifact@v6
         with:

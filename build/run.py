@@ -442,22 +442,48 @@ def get_build_targets(target):
 
 IOS_ARCHS = ['simulator:x64', 'device:arm64']
 IOS_FRAMEWORK_ARCHS = ['simulator:x64', 'simulator:arm64', 'device:arm64']
-AGC2_IOS_ARCHS = ['simulator:x64', 'simulator:arm64', 'device:arm64']
-AGC2_MACOS_ARCHS = ['x64', 'arm64']
-AGC2_TARGET = 'modules/audio_processing:gain_controller2_c_api_complete'
-AGC2_ANDROID_TARGET = 'sdk/android:agc2capi_jni'
-AGC2_ARCHIVE_REL_PATH = os.path.join(
-    'obj', 'modules', 'audio_processing', 'libgain_controller2_c_api_complete.a')
-AGC2_OUTPUT_NAME = 'agc2capi'
-AGC2_XCFRAMEWORK_NAME = 'AGC2Capi.xcframework'
-AGC2_ANDROID_SO_NAME = 'libagc2capi.so'
-AGC2_ANDROID_AAR_NAME = 'agc2capi.aar'
-AGC2_JAVA_SRC_REL = os.path.join(
-    'sdk', 'android', 'api', 'org', 'webrtc', 'agc2', 'GainController2.java')
-AGC2_HEADERS = [
-    os.path.join('modules', 'audio_processing', 'gain_controller2_c_api.h'),
-    os.path.join('rtc_base', 'system', 'rtc_export.h'),
-]
+
+# Android build variants configuration
+AndroidVariant = collections.namedtuple('AndroidVariant', [
+    'ninja_targets',      # List of ninja targets to build per arch
+    'build_aar',          # Whether to build AAR
+    'aar_builder',        # Function name to build AAR (None for default webrtc aar)
+    'generate_version_java',  # Whether to generate WebrtcBuildVersion.java
+])
+
+ANDROID_VARIANTS = {
+    'webrtc': AndroidVariant(
+        ninja_targets=['sdk/android:libwebrtc', 'sdk/android:libjingle_peerconnection_so', 'sdk/android:native_api'],
+        build_aar=True,
+        aar_builder=None,  # Use default build_aar.py
+        generate_version_java=True,
+    ),
+}
+
+# Apple build variants configuration
+AppleVariant = collections.namedtuple('AppleVariant', [
+    'ios_archs',          # iOS architectures to build
+    'macos_archs',        # macOS architectures to build (empty for iOS-only)
+    'ninja_target',       # Ninja target to build
+    'output_name',        # Output library name
+    'xcframework_name',   # XCFramework output name
+    'archive_rel_path',   # Relative path to the archive in build dir (for thin archive)
+    'headers',            # Header files to include
+    'build_ios_framework',  # Whether to use build_ios_libs.sh for framework
+])
+
+APPLE_VARIANTS = {
+    'webrtc': AppleVariant(
+        ios_archs=['simulator:x64', 'simulator:arm64', 'device:arm64'],
+        macos_archs=[],
+        ninja_target=None,  # Uses default targets
+        output_name='webrtc',
+        xcframework_name='WebRTC.xcframework',
+        archive_rel_path=None,
+        headers=[],
+        build_ios_framework=True,
+    ),
+}
 
 
 def to_gn_args(gn_args: List[str], extra_gn_args: str) -> str:
@@ -480,50 +506,6 @@ def get_ios_deployment_target(webrtc_src_dir: str, device: str) -> str:
             ['python3', '-c',
              f'from build_ios_libs import IOS_MINIMUM_DEPLOYMENT_TARGET; '
              f'print(IOS_MINIMUM_DEPLOYMENT_TARGET["{device}"])'])
-
-
-def get_llvm_ar(webrtc_src_dir: str) -> str:
-    return os.path.join(webrtc_src_dir, 'third_party', 'llvm-build',
-                        'Release+Asserts', 'bin', 'llvm-ar')
-
-
-def rehydrate_static_archive(ar_path: str, src_archive: str, dst_archive: str, base_dir: str):
-    if not os.path.exists(src_archive):
-        raise Exception(f'Archive not found: {src_archive}')
-
-    file_info = cmdcap(['file', src_archive])
-    is_thin = 'thin' in file_info.lower()
-    if not is_thin:
-        mkdir_p(os.path.dirname(dst_archive))
-        shutil.copy2(src_archive, dst_archive)
-        return
-
-    obj_list = cmdcap([ar_path, 't', src_archive]).splitlines()
-    if not obj_list:
-        raise Exception(f'Empty archive: {src_archive}')
-
-    full_paths = []
-    for entry in obj_list:
-        if os.path.isabs(entry):
-            path = entry
-        else:
-            path = os.path.normpath(os.path.join(base_dir, entry))
-        if not os.path.exists(path):
-            raise Exception(f'Missing object for thin archive: {path}')
-        full_paths.append(path)
-
-    mkdir_p(os.path.dirname(dst_archive))
-    with cd(base_dir):
-        cmd([ar_path, 'rcs', dst_archive, *full_paths])
-
-
-def copy_agc2_headers(webrtc_src_dir: str, headers_dir: str):
-    rm_rf(headers_dir)
-    for rel in AGC2_HEADERS:
-        src = os.path.join(webrtc_src_dir, rel)
-        dst = os.path.join(headers_dir, rel)
-        mkdir_p(os.path.dirname(dst))
-        shutil.copy2(src, dst)
 
 
 def get_webrtc_version_info(version_info: VersionInfo):
@@ -661,7 +643,18 @@ def build_webrtc_android(
         debug=False,
         test=False,
         gen=False, gen_force=False,
-        nobuild=False, nobuild_aar=False):
+        nobuild=False, nobuild_aar=False,
+        variant='webrtc'):
+    """
+    Build WebRTC for Android with support for different variants.
+
+    Args:
+        variant: Build variant ('webrtc' for full SDK, 'agc2' for AGC2 only)
+    """
+    variant_config = ANDROID_VARIANTS.get(variant)
+    if variant_config is None:
+        raise Exception(f'Unknown Android variant: {variant}')
+
     if webrtc_source_dir is None:
         webrtc_source_dir = os.path.join(source_dir, 'webrtc')
     if webrtc_build_dir is None:
@@ -671,20 +664,21 @@ def build_webrtc_android(
 
     mkdir_p(webrtc_build_dir)
 
-    # Java ファイル作成
+    # Java ファイル作成 (only for webrtc variant)
     # WebrtcBuildVersion.java file creation.
-    branch, commit, revision, maint = get_webrtc_version_info(version_info)
-    name = 'WebrtcBuildVersion'
-    lines = []
-    lines.append('package org.webrtc;')
-    lines.append(f'public interface {name} {{')
-    lines.append(f'    public static final String webrtc_branch = "{branch}";')
-    lines.append(f'    public static final String webrtc_commit = "{commit}";')
-    lines.append(f'    public static final String webrtc_revision = "{revision}";')
-    lines.append(f'    public static final String maint_version = "{maint}";')
-    lines.append('}')
-    with open(os.path.join(webrtc_src_dir, 'sdk', 'android', 'api', 'org', 'webrtc', f'{name}.java'), 'wb') as f:
-        f.writelines(map(lambda x: (x + '\n').encode('utf-8'), lines))
+    if variant_config.generate_version_java:
+        branch, commit, revision, maint = get_webrtc_version_info(version_info)
+        name = 'WebrtcBuildVersion'
+        lines = []
+        lines.append('package org.webrtc;')
+        lines.append(f'public interface {name} {{')
+        lines.append(f'    public static final String webrtc_branch = "{branch}";')
+        lines.append(f'    public static final String webrtc_commit = "{commit}";')
+        lines.append(f'    public static final String webrtc_revision = "{revision}";')
+        lines.append(f'    public static final String maint_version = "{maint}";')
+        lines.append('}')
+        with open(os.path.join(webrtc_src_dir, 'sdk', 'android', 'api', 'org', 'webrtc', f'{name}.java'), 'wb') as f:
+            f.writelines(map(lambda x: (x + '\n').encode('utf-8'), lines))
 
     gn_args_base = [
         f"is_debug={'true' if debug else 'false'}",
@@ -692,9 +686,9 @@ def build_webrtc_android(
         *COMMON_GN_ARGS
     ]
 
-    # aar 生成
+    # aar 生成 (default webrtc aar using build_aar.py)
     # build aar
-    if not nobuild_aar:
+    if not nobuild_aar and variant_config.build_aar and variant_config.aar_builder is None:
         work_dir = os.path.join(webrtc_build_dir, 'aar')
         mkdir_p(work_dir)
         gn_args = [*gn_args_base]
@@ -718,205 +712,16 @@ def build_webrtc_android(
             ]
             gn_gen(webrtc_src_dir, work_dir, gn_args, extra_gn_args)
         if not nobuild:
-            cmd(['autoninja', '-C', work_dir, *get_build_targets('android')])
-            ar = os.path.join(webrtc_src_dir, 'third_party/llvm-build/Release+Asserts/bin/llvm-ar')
-            archive_objects(ar, os.path.join(work_dir, 'obj'), os.path.join(work_dir, 'libwebrtc.a'))
+            cmd(['autoninja', '-C', work_dir, *variant_config.ninja_targets])
+            # Only archive objects for webrtc variant
+            if variant == 'webrtc':
+                ar = os.path.join(webrtc_src_dir, 'third_party/llvm-build/Release+Asserts/bin/llvm-ar')
+                archive_objects(ar, os.path.join(work_dir, 'obj'), os.path.join(work_dir, 'libwebrtc.a'))
         if test:
             cmd(['autoninja', '-C', work_dir, 'rtc_unittests'])
             run_unittests = os.path.join(work_dir, 'rtc_unittests')
             cmd([run_unittests])
 
-
-def build_agc2_android_aar(webrtc_src_dir: str, webrtc_build_dir: str):
-    work_dir = os.path.join(webrtc_build_dir, 'agc2', 'aar_work')
-    rm_rf(work_dir)
-    mkdir_p(work_dir)
-
-    manifest_path = os.path.join(work_dir, 'AndroidManifest.xml')
-    with open(manifest_path, 'w', encoding='utf-8') as f:
-        f.write('<manifest xmlns:android="http://schemas.android.com/apk/res/android" '
-                'package="org.webrtc.agc2"/>')
-
-    java_src = os.path.join(webrtc_src_dir, AGC2_JAVA_SRC_REL)
-    classes_dir = os.path.join(work_dir, 'classes')
-    mkdir_p(classes_dir)
-    cmd(['javac', '-source', '8', '-target', '8', '-d', classes_dir, java_src])
-
-    classes_jar = os.path.join(work_dir, 'classes.jar')
-    cmd(['jar', 'cf', classes_jar, '-C', classes_dir, '.'])
-
-    for arch in ANDROID_ARCHS:
-        so_src = os.path.join(webrtc_build_dir, arch, AGC2_ANDROID_SO_NAME)
-        if not os.path.exists(so_src):
-            raise Exception(f'Missing shared library: {so_src}')
-        so_dst = os.path.join(work_dir, 'jni', arch, AGC2_ANDROID_SO_NAME)
-        mkdir_p(os.path.dirname(so_dst))
-        shutil.copy2(so_src, so_dst)
-
-    aar_dir = os.path.join(webrtc_build_dir, 'agc2')
-    mkdir_p(aar_dir)
-    aar_path = os.path.join(aar_dir, AGC2_ANDROID_AAR_NAME)
-    with zipfile.ZipFile(aar_path, 'w') as f:
-        for file in enum_all_files(work_dir, work_dir):
-            f.write(filename=os.path.join(work_dir, file), arcname=file)
-    return aar_path
-
-
-def build_agc2_android(
-        source_dir, build_dir, version_info: VersionInfo, extra_gn_args,
-        webrtc_source_dir=None, webrtc_build_dir=None,
-        debug=False,
-        test=False,
-        gen=False, gen_force=False,
-        nobuild=False, nobuild_aar=False):
-    if webrtc_source_dir is None:
-        webrtc_source_dir = os.path.join(source_dir, 'webrtc')
-    if webrtc_build_dir is None:
-        webrtc_build_dir = os.path.join(build_dir, 'webrtc')
-
-    webrtc_src_dir = os.path.join(webrtc_source_dir, 'src')
-
-    mkdir_p(webrtc_build_dir)
-
-    gn_args_base = [
-        f"is_debug={'true' if debug else 'false'}",
-        f"is_java_debug={'true' if debug else 'false'}",
-        *COMMON_GN_ARGS
-    ]
-
-    for arch in ANDROID_ARCHS:
-        work_dir = os.path.join(webrtc_build_dir, arch)
-        if gen_force:
-            rm_rf(work_dir)
-        if not os.path.exists(os.path.join(work_dir, 'args.gn')) or gen:
-            gn_args = [
-                *gn_args_base,
-                'target_os="android"',
-                f'target_cpu="{ANDROID_TARGET_CPU[arch]}"',
-                f'rtc_include_tests={"true" if test else "false"}',
-            ]
-            gn_gen(webrtc_src_dir, work_dir, gn_args, extra_gn_args)
-        if not nobuild:
-            cmd(['autoninja', '-C', work_dir, AGC2_ANDROID_TARGET])
-        if test:
-            cmd(['autoninja', '-C', work_dir, 'rtc_unittests'])
-            run_unittests = os.path.join(work_dir, 'rtc_unittests')
-            cmd([run_unittests])
-
-    if not nobuild_aar:
-        build_agc2_android_aar(webrtc_src_dir, webrtc_build_dir)
-
-
-def build_agc2_apple(
-        source_dir, build_dir, version_info: VersionInfo, extra_gn_args,
-        webrtc_source_dir=None, webrtc_build_dir=None,
-        debug=False,
-        test=False,
-        gen=False, gen_force=False,
-        nobuild=False):
-    if webrtc_source_dir is None:
-        webrtc_source_dir = os.path.join(source_dir, 'webrtc')
-    if webrtc_build_dir is None:
-        webrtc_build_dir = os.path.join(build_dir, 'webrtc')
-
-    webrtc_src_dir = os.path.join(webrtc_source_dir, 'src')
-
-    agc2_build_dir = os.path.join(webrtc_build_dir, 'agc2')
-    mkdir_p(agc2_build_dir)
-
-    llvm_ar = get_llvm_ar(webrtc_src_dir)
-    headers_dir = os.path.join(agc2_build_dir, 'include')
-
-    ios_device_lib = None
-    ios_sim_libs = []
-    for device_arch in AGC2_IOS_ARCHS:
-        device, arch = device_arch.split(':')
-        work_dir = os.path.join(agc2_build_dir, 'ios', device, arch)
-        if gen_force:
-            rm_rf(work_dir)
-
-        if not os.path.exists(os.path.join(work_dir, 'args.gn')) or gen:
-            ios_deployment_target = get_ios_deployment_target(webrtc_src_dir, device)
-            gn_args = [
-                f"is_debug={'true' if debug else 'false'}",
-                'target_os="ios"',
-                f'target_cpu="{arch}"',
-                f'target_environment="{device}"',
-                "ios_enable_code_signing=false",
-                f'ios_deployment_target="{ios_deployment_target}"',
-                'enable_ios_bitcode=false',
-                f"enable_stripping={'false' if debug else 'true'}",
-                f'rtc_include_tests={"true" if test else "false"}',
-                'use_custom_libcxx=false',
-                'treat_warnings_as_errors=false',
-                *COMMON_GN_ARGS,
-            ]
-            gn_gen(webrtc_src_dir, work_dir, gn_args, extra_gn_args)
-
-        if not nobuild:
-            cmd(['autoninja', '-C', work_dir, AGC2_TARGET])
-            thin_archive = os.path.join(work_dir, AGC2_ARCHIVE_REL_PATH)
-            full_archive = os.path.join(work_dir, f'lib{AGC2_OUTPUT_NAME}.a')
-            rehydrate_static_archive(llvm_ar, thin_archive, full_archive, work_dir)
-
-        if device == 'device':
-            ios_device_lib = os.path.join(work_dir, f'lib{AGC2_OUTPUT_NAME}.a')
-        else:
-            ios_sim_libs.append(os.path.join(work_dir, f'lib{AGC2_OUTPUT_NAME}.a'))
-
-    if not nobuild:
-        if ios_device_lib is None:
-            raise Exception('Missing iOS device archive')
-        ios_sim_universal = os.path.join(agc2_build_dir, 'ios', 'simulator',
-                                         f'lib{AGC2_OUTPUT_NAME}.a')
-        mkdir_p(os.path.dirname(ios_sim_universal))
-        if len(ios_sim_libs) == 1:
-            shutil.copy2(ios_sim_libs[0], ios_sim_universal)
-        else:
-            cmd(['lipo', *ios_sim_libs, '-create', '-output', ios_sim_universal])
-
-    mac_libs = []
-    for arch in AGC2_MACOS_ARCHS:
-        work_dir = os.path.join(agc2_build_dir, 'mac', arch)
-        if gen_force:
-            rm_rf(work_dir)
-        if not os.path.exists(os.path.join(work_dir, 'args.gn')) or gen:
-            gn_args = [
-                f"is_debug={'true' if debug else 'false'}",
-                f'rtc_include_tests={"true" if test else "false"}',
-                'target_os="mac"',
-                f'target_cpu="{arch}"',
-                'mac_deployment_target="10.11"',
-                'enable_stripping=true',
-                'enable_dsyms=false',
-                'use_custom_libcxx=false',
-                'treat_warnings_as_errors=false',
-                'clang_use_chrome_plugins=false',
-                'use_lld=false',
-                *COMMON_GN_ARGS,
-            ]
-            gn_gen(webrtc_src_dir, work_dir, gn_args, extra_gn_args)
-        if not nobuild:
-            cmd(['autoninja', '-C', work_dir, AGC2_TARGET])
-            thin_archive = os.path.join(work_dir, AGC2_ARCHIVE_REL_PATH)
-            full_archive = os.path.join(work_dir, f'lib{AGC2_OUTPUT_NAME}.a')
-            rehydrate_static_archive(llvm_ar, thin_archive, full_archive, work_dir)
-        mac_libs.append(os.path.join(work_dir, f'lib{AGC2_OUTPUT_NAME}.a'))
-
-    if not nobuild:
-        mac_universal = os.path.join(agc2_build_dir, 'mac', f'lib{AGC2_OUTPUT_NAME}.a')
-        mkdir_p(os.path.dirname(mac_universal))
-        cmd(['lipo', *mac_libs, '-create', '-output', mac_universal])
-
-        copy_agc2_headers(webrtc_src_dir, headers_dir)
-
-        xcframework_dir = os.path.join(agc2_build_dir, AGC2_XCFRAMEWORK_NAME)
-        rm_rf(xcframework_dir)
-        cmd(['xcodebuild', '-create-xcframework',
-             '-library', ios_device_lib, '-headers', headers_dir,
-             '-library', ios_sim_universal, '-headers', headers_dir,
-             '-library', mac_universal, '-headers', headers_dir,
-             '-output', xcframework_dir])
 
 
 def build_webrtc(
@@ -1207,74 +1012,6 @@ def package_webrtc(source_dir, build_dir, package_dir, target,
                     f.add(name=file, arcname=file)
 
 
-def write_agc2_maven_pom(pom_path: str, version: str,
-                         group_id: str = 'org.webrtc',
-                         artifact_id: str = 'agc2capi'):
-    lines = [
-        '<?xml version="1.0" encoding="UTF-8"?>',
-        '<project xmlns="http://maven.apache.org/POM/4.0.0"',
-        '         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"',
-        '         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 '
-        'http://maven.apache.org/xsd/maven-4.0.0.xsd">',
-        '  <modelVersion>4.0.0</modelVersion>',
-        f'  <groupId>{group_id}</groupId>',
-        f'  <artifactId>{artifact_id}</artifactId>',
-        f'  <version>{version}</version>',
-        '  <packaging>aar</packaging>',
-        '</project>',
-    ]
-    with open(pom_path, 'w', encoding='utf-8') as f:
-        f.write('\n'.join(lines) + '\n')
-
-
-def package_agc2_apple(source_dir, build_dir, package_dir,
-                       webrtc_source_dir=None, webrtc_build_dir=None):
-    if webrtc_source_dir is None:
-        webrtc_source_dir = os.path.join(source_dir, 'webrtc')
-    if webrtc_build_dir is None:
-        webrtc_build_dir = os.path.join(build_dir, 'webrtc')
-
-    agc2_build_dir = os.path.join(webrtc_build_dir, 'agc2')
-    xcframework_src = os.path.join(agc2_build_dir, AGC2_XCFRAMEWORK_NAME)
-    if not os.path.isdir(xcframework_src):
-        raise Exception(f'Missing xcframework: {xcframework_src}')
-
-    rm_rf(package_dir)
-    mkdir_p(package_dir)
-    shutil.copytree(xcframework_src, os.path.join(package_dir, AGC2_XCFRAMEWORK_NAME))
-
-    spm_dir = os.path.abspath(os.path.join(BASE_DIR, '..', 'spm'))
-    mkdir_p(spm_dir)
-    spm_dst = os.path.join(spm_dir, AGC2_XCFRAMEWORK_NAME)
-    rm_rf(spm_dst)
-    shutil.copytree(xcframework_src, spm_dst)
-
-
-def package_agc2_android(source_dir, build_dir, package_dir, version_info: VersionInfo,
-                         webrtc_source_dir=None, webrtc_build_dir=None):
-    if webrtc_source_dir is None:
-        webrtc_source_dir = os.path.join(source_dir, 'webrtc')
-    if webrtc_build_dir is None:
-        webrtc_build_dir = os.path.join(build_dir, 'webrtc')
-
-    agc2_build_dir = os.path.join(webrtc_build_dir, 'agc2')
-    aar_src = os.path.join(agc2_build_dir, AGC2_ANDROID_AAR_NAME)
-    if not os.path.exists(aar_src):
-        raise Exception(f'Missing AAR: {aar_src}')
-
-    rm_rf(package_dir)
-    mkdir_p(os.path.join(package_dir, 'aar'))
-    shutil.copy2(aar_src, os.path.join(package_dir, 'aar', AGC2_ANDROID_AAR_NAME))
-
-    maven_dir = os.path.join(package_dir, 'maven')
-    mkdir_p(maven_dir)
-    version = version_info.webrtc_build_version
-    artifact_id = 'agc2capi'
-    shutil.copy2(aar_src, os.path.join(maven_dir, f'{artifact_id}-{version}.aar'))
-    pom_path = os.path.join(maven_dir, f'{artifact_id}-{version}.pom')
-    write_agc2_maven_pom(pom_path, version)
-
-
 TARGETS = [
     'windows_x86_64',
     'windows_arm64',
@@ -1519,12 +1256,10 @@ def main():
                                  nobuild_framework=args.webrtc_nobuild_ios_framework,
                                  overlap_build_dir=args.webrtc_overlap_ios_build_dir)
             elif args.target in ['android', 'android_prefixed']:
-                build_webrtc_android(**build_webrtc_args, nobuild_aar=args.webrtc_nobuild_android_aar)
-            elif args.target == 'agc2_android':
-                build_agc2_android(**build_webrtc_args, nobuild_aar=args.webrtc_nobuild_android_aar)
-            elif args.target == 'agc2_apple':
-                build_agc2_apple(**build_webrtc_args)
-            elif args.target in ['apple', 'apple_prefixed']:
+                build_webrtc_android(**build_webrtc_args,
+                                     nobuild_aar=args.webrtc_nobuild_android_aar,
+                                     variant='webrtc')
+            elif args.target in ['agc2_android', 'agc2_apple', 'apple', 'apple_prefixed']:
                 pass
             else:
                 build_webrtc(**build_webrtc_args, target=args.target)
@@ -1532,14 +1267,9 @@ def main():
     if args.op == 'package':
         mkdir_p(package_dir)
         with cd(BASE_DIR):
-            if args.target == 'agc2_apple':
-                package_agc2_apple(source_dir, build_dir, package_dir,
-                                   webrtc_source_dir=webrtc_source_dir,
-                                   webrtc_build_dir=webrtc_build_dir)
-            elif args.target == 'agc2_android':
-                package_agc2_android(source_dir, build_dir, package_dir, version_info,
-                                     webrtc_source_dir=webrtc_source_dir,
-                                     webrtc_build_dir=webrtc_build_dir)
+            if args.target in ['agc2_apple', 'agc2_android']:
+                # AGC2 packaging is handled by shell scripts
+                pass
             else:
                 package_webrtc(source_dir, build_dir, package_dir, args.target,
                                webrtc_source_dir=webrtc_source_dir,
