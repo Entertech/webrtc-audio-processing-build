@@ -181,7 +181,9 @@ PATCHES = {
     'apple_prefixed': [
         'apple_prefix.patch',
     ],
-    'apple_export_audio': [],
+    'apple_export_audio': [
+        'apple_export_audio.patch',
+    ],
     'windows_x86_64': [
         'add_license_dav1d.patch',
         'windows_add_deps.patch',
