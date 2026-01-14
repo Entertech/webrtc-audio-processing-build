@@ -1,1 +1,1 @@
-rootProject.name = "agc2capi-publish"
+rootProject.name = "export-audio-publish"

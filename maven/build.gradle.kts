@@ -3,13 +3,13 @@ plugins {
     id("maven-publish")
 }
 
-val aarPath = System.getenv("AGC2_AAR_PATH")?.takeIf { it.isNotBlank() }
-    ?: error("AGC2_AAR_PATH is required")
+val aarPath = System.getenv("EXPORT_AUDIO_AAR_PATH")?.takeIf { it.isNotBlank() }
+    ?: error("EXPORT_AUDIO_AAR_PATH is required")
 
-group = "ai.looktech.audio_processing"
-version = System.getenv("AGC2_VERSION") ?: "0.0.0"
+group = "ai.looktech.webrtc"
+version = System.getenv("EXPORT_AUDIO_VERSION") ?: "0.0.0"
 
-val artifactIdValue = "agc2capi"
+val artifactIdValue = "audio"
 
 publishing {
     repositories {
@@ -30,8 +30,8 @@ mavenPublishing {
 
     coordinates(group.toString(), artifactIdValue, version.toString())
     pom {
-        name.set("agc2capi")
-        description.set("WebRTC AGC2 C API package")
+        name.set("audio")
+        description.set("WebRTC Audio package")
         inceptionYear.set("2026")
         url.set("https://github.com/Entertech/webrtc-audio-processing-build")
         licenses {

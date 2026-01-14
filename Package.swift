@@ -2,21 +2,21 @@
 import PackageDescription
 
 let package = Package(
-    name: "AGC2Capi",
+    name: "WebRTCAudio",
     platforms: [
         .iOS(.v12),
         .macOS(.v10_13)
     ],
     products: [
         .library(
-            name: "AGC2Capi",
-            targets: ["AGC2Capi"]
+            name: "WebRTCAudio",
+            targets: ["WebRTCAudio"]
         )
     ],
     targets: [
         .binaryTarget(
-            name: "AGC2Capi",
-            url: "https://github.com/Entertech/webrtc-audio-processing-build/releases/download/v0.0.0-pre/AGC2Capi.xcframework.zip",
+            name: "WebRTCAudio",
+            url: "https://github.com/Entertech/webrtc-audio-processing-build/releases/download/v0.0.0-pre/ExportAudio.xcframework.zip",
             checksum: "0000000000000000000000000000000000000000000000000000000000000000"
         )
     ]

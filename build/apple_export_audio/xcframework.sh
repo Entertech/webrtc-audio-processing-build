@@ -13,9 +13,9 @@ OUT_DIR="$(realpath "$3")"
 PREFIX="${4:-""}"
 
 if [ -z "$PREFIX" ]; then
-  FRAMEWORK_NAME="AGC2Capi"
+  FRAMEWORK_NAME="ExportAudio"
 else
-  FRAMEWORK_NAME="${PREFIX}AGC2Capi"
+  FRAMEWORK_NAME="${PREFIX}ExportAudio"
 fi
 
 DEBUG="false"
@@ -25,7 +25,7 @@ fi
 
 PARALLEL_BUILDS=6
 
-echo "agc2/xcframework.sh: MODE=$MODE, DEBUG=$DEBUG, SOURCE_DIR=$SOURCE_DIR, OUT_DIR=$OUT_DIR, PREFIX=$PREFIX, FRAMEWORK_NAME=$FRAMEWORK_NAME"
+echo "xcframework.sh: MODE=$MODE, DEBUG=$DEBUG, SOURCE_DIR=$SOURCE_DIR, OUT_DIR=$OUT_DIR, PREFIX=$PREFIX, FRAMEWORK_NAME=$FRAMEWORK_NAME"
 
 start_group() {
   if [[ "$CI" == "true" ]]; then
@@ -79,14 +79,14 @@ for platform_config in "${PLATFORMS[@]}"; do
   platform="${platform_config%%:*}"
   config="${platform_config#*:}"
   
-  start_group "Building AGC2 $platform"
+  start_group "Building $platform"
   
   gn gen "$OUT_DIR/$platform" --args="$COMMON_ARGS $config" --ide=xcode
   
   if [[ $platform == *"macOS"* ]]; then
-    build_target="sdk:agc2_mac_framework"
+    build_target="sdk:export_audio_mac_framework"
   else
-    build_target="sdk:agc2_framework"
+    build_target="sdk:export_audio_framework"
   fi
   
   ninja -C "$OUT_DIR/$platform" "$build_target" -j $PARALLEL_BUILDS --quiet || exit 1

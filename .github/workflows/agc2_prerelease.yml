@@ -1,4 +1,4 @@
-name: agc2-prerelease
+name: export-audio-prerelease
 
 on:
   workflow_dispatch:
@@ -56,7 +56,7 @@ jobs:
           else
             commit="$(git ls-remote https://github.com/Entertech/webrtc-audio-processing HEAD | awk '{print $1}')"
           fi
-          AGC2_COMMIT="$commit" AGC2_VERSION="${{ github.event.inputs.version }}" python3 - <<'PY'
+          EXPORT_AUDIO_COMMIT="$commit" EXPORT_AUDIO_VERSION="${{ github.event.inputs.version }}" python3 - <<'PY'
           import os
           from pathlib import Path
           path = Path("build/VERSION")
@@ -67,7 +67,7 @@ jobs:
             key, val = line.split("=", 1)
             data[key] = val
           webrtc_version = data["WEBRTC_VERSION"]
-          override_version = os.environ.get("AGC2_VERSION", "").strip()
+          override_version = os.environ.get("EXPORT_AUDIO_VERSION", "").strip()
           if override_version:
             new_webrtc_version = override_version
           else:
@@ -75,7 +75,7 @@ jobs:
             parts[-1] = str(int(parts[-1]) + 1)
             new_webrtc_version = ".".join(parts)
           new_build_version = f"{new_webrtc_version}.0"
-          commit = os.environ["AGC2_COMMIT"]
+          commit = os.environ["EXPORT_AUDIO_COMMIT"]
           parts = new_webrtc_version.split(".")
           readable_version = f"M{parts[0]}.{parts[1]}@{{#{parts[2]}}}"
           print(f"commit={commit}")
@@ -112,12 +112,12 @@ jobs:
         uses: actions/cache@v5
         with:
           path: |
-            build/_source/agc2_apple/depot_tools
-            build/_source/agc2_apple/.cipd
+            build/_source/apple_export_audio/depot_tools
+            build/_source/apple_export_audio/.cipd
             ~/.vpython-root
-          key: agc2-macos-deps-${{ runner.os }}-v1
+          key: export-audio-macos-deps-${{ runner.os }}-v1
           restore-keys: |
-            agc2-macos-deps-${{ runner.os }}-
+            export-audio-macos-deps-${{ runner.os }}-
       - uses: maxim-lobanov/setup-xcode@v1
         with:
           xcode-version: 16.4
@@ -126,19 +126,19 @@ jobs:
         with:
           name: version-file
           path: build
-      - name: Build AGC2 Apple
-        run: ./build.agc2_apple.sh
+      - name: Build Apple Export Audio
+        run: ./build.apple_export_audio.sh
       - name: Create checksum
         run: |
-          cd _package/agc2_apple
-          swift package compute-checksum AGC2Capi.xcframework.zip > AGC2Capi.xcframework.zip.checksum
+          cd _package/apple_export_audio
+          swift package compute-checksum ExportAudio.xcframework.zip > ExportAudio.xcframework.zip.checksum
       - name: Upload Apple artifacts
         uses: actions/upload-artifact@v6
         with:
-          name: agc2-apple
+          name: apple_export_audio
           path: |
-            build/_package/agc2_apple/AGC2Capi.xcframework.zip
-            build/_package/agc2_apple/AGC2Capi.xcframework.zip.checksum
+            build/_package/apple_export_audio/ExportAudio.xcframework.zip
+            build/_package/apple_export_audio/ExportAudio.xcframework.zip.checksum
 
   build-android:
     runs-on: ${{ fromJSON(needs.pick-runner.outputs.runner) }}
@@ -152,12 +152,12 @@ jobs:
         uses: actions/cache@v5
         with:
           path: |
-            build/_source/agc2_android/depot_tools
-            build/_source/agc2_android/.cipd
+            build/_source/android_export_audio/depot_tools
+            build/_source/android_export_audio/.cipd
             ~/.vpython-root
-          key: agc2-linux-deps-${{ runner.os }}-v1
+          key: export-audio-linux-deps-${{ runner.os }}-v1
           restore-keys: |
-            agc2-linux-deps-${{ runner.os }}-
+            export-audio-linux-deps-${{ runner.os }}-
       - uses: actions/setup-java@v5
         with:
           distribution: "temurin"
@@ -167,13 +167,13 @@ jobs:
         with:
           name: version-file
           path: build
-      - name: Build AGC2 Android
-        run: ./build.agc2_android.sh
+      - name: Build Export Audio Android
+        run: ./build.android_export_audio.sh
       - name: Upload Android artifacts
         uses: actions/upload-artifact@v6
         with:
-          name: agc2-android
-          path: build/_package/agc2_android/aar/agc2capi.aar
+          name: android_export_audio
+          path: build/_package/android_export_audio/webrtc.tar.gz
 
   prerelease:
     runs-on: ${{ fromJSON(needs.pick-runner.outputs.runner) }}
@@ -182,11 +182,11 @@ jobs:
       - uses: actions/checkout@v6
       - uses: actions/download-artifact@v7
         with:
-          name: agc2-apple
+          name: apple_export_audio
           path: artifacts
       - uses: actions/download-artifact@v7
         with:
-          name: agc2-android
+          name: android_export_audio
           path: artifacts
       - name: Download VERSION artifact
         uses: actions/download-artifact@v7
@@ -195,7 +195,7 @@ jobs:
           path: build
       - id: checksum
         run: |
-          checksum="$(cat artifacts/AGC2Capi.xcframework.zip.checksum)"
+          checksum="$(cat artifacts/ExportAudio.xcframework.zip.checksum)"
           echo "checksum=$checksum" >> "$GITHUB_OUTPUT"
       - name: Create prerelease
         uses: softprops/action-gh-release@v2
@@ -206,16 +206,16 @@ jobs:
           name: ${{ needs.prepare.outputs.prerelease_tag }}
           prerelease: true
           files: |
-            artifacts/AGC2Capi.xcframework.zip
-            artifacts/AGC2Capi.xcframework.zip.checksum
-            artifacts/agc2capi.aar
+            artifacts/ExportAudio.xcframework.zip
+            artifacts/ExportAudio.xcframework.zip.checksum
+            artifacts/webrtc.tar.gz
       - name: Update Package.swift
         run: |
           python3 - <<'PY'
           import os
           import re
           from pathlib import Path
-          url = f"https://github.com/Entertech/webrtc-audio-processing-build/releases/download/{os.environ['TAG']}/AGC2Capi.xcframework.zip"
+          url = f"https://github.com/Entertech/webrtc-audio-processing-build/releases/download/{os.environ['TAG']}/ExportAudio.xcframework.zip"
           checksum = os.environ["CHECKSUM"]
           path = Path("Package.swift")
           text = path.read_text()
@@ -235,8 +235,8 @@ jobs:
           branch: release/v${{ needs.prepare.outputs.webrtc_version }}
           title: "Release v${{ needs.prepare.outputs.webrtc_version }}"
           body: |
-            - Update build/VERSION for AGC2 artifacts
+            - Update build/VERSION for Export Audio artifacts
             - Update Package.swift with prerelease URL and checksum
           labels: |
-            agc2-release
+            export-audio-release
           commit-message: "Release v${{ needs.prepare.outputs.webrtc_version }}"

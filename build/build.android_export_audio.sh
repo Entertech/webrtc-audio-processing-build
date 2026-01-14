@@ -4,7 +4,7 @@ cd `dirname $0`
 source VERSION
 SCRIPT_DIR="`pwd`"
 
-PACKAGE_NAME=android
+PACKAGE_NAME=android_export_audio
 PACKAGE_DIR="`pwd`/_package/$PACKAGE_NAME"
 
 set -ex
