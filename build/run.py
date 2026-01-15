@@ -867,7 +867,7 @@ def package_webrtc(source_dir, build_dir, package_dir, target,
 
     # ライセンス生成
     # License creation
-    if target in ['android', 'android_prefixed', 'export_audio_android']:
+    if target in ['android', 'android_prefixed', 'android_export_audio']:
         dirs = []
         for arch in ANDROID_ARCHS:
             dirs += [
