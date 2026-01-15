@@ -108,16 +108,12 @@ jobs:
         working-directory: ./build
     steps:
       - uses: actions/checkout@v6
-      - name: Cache depot tools and CIPD
+      - name: Cache depot tools
         uses: actions/cache@v5
         with:
           path: |
             build/_source/apple_export_audio/depot_tools
-            build/_source/apple_export_audio/.cipd
-            ~/.vpython-root
-          key: export-audio-macos-deps-${{ runner.os }}-v1
-          restore-keys: |
-            export-audio-macos-deps-${{ runner.os }}-
+          key: depot-tools
       - uses: maxim-lobanov/setup-xcode@v1
         with:
           xcode-version: 16.4
@@ -148,16 +144,12 @@ jobs:
         working-directory: ./build
     steps:
       - uses: actions/checkout@v6
-      - name: Cache depot tools and CIPD
+      - name: Cache depot tools
         uses: actions/cache@v5
         with:
           path: |
             build/_source/android_export_audio/depot_tools
-            build/_source/android_export_audio/.cipd
-            ~/.vpython-root
-          key: export-audio-linux-deps-${{ runner.os }}-v1
-          restore-keys: |
-            export-audio-linux-deps-${{ runner.os }}-
+          key: depot-tools
       - uses: actions/setup-java@v5
         with:
           distribution: "temurin"

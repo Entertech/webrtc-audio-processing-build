@@ -272,7 +272,7 @@ def apply_patch(patch, dir, depth):
 
 
 def get_webrtc(source_dir, patch_dir, version, target,
-               webrtc_source_dir=None, force=False, fetch=False):
+               webrtc_source_dir=None, force=False, fetch=False, shallow=False):
     if webrtc_source_dir is None:
         webrtc_source_dir = os.path.join(source_dir, 'webrtc')
     if force:
@@ -304,7 +304,10 @@ def get_webrtc(source_dir, patch_dir, version, target,
             else:
                 cmd(['git', 'checkout', '-f', version])
             cmd(['git', 'clean', '-df'])
-            cmd(['gclient', 'sync', '-D', '--force', '--reset', '--with_branch_heads', '--jobs=8'])
+            sync_args = ['gclient', 'sync', '-D', '--force', '--reset', '--with_branch_heads', '--jobs=8']
+            if shallow:
+                sync_args.append('--no-history')
+            cmd(sync_args)
             for patch in PATCHES[target]:
                 depth, dirs = PATCH_INFO.get(patch, (1, ['.']))
                 dir = os.path.join(src_dir, *dirs)
@@ -1104,6 +1107,7 @@ def main():
     bp.add_argument("--webrtc-source-dir")
     bp.add_argument("--commit")
     bp.add_argument("--test", action='store_true')
+    bp.add_argument("--shallow", action='store_true')
     # 現在 build と package を分ける意味は無いのだけど、
     # 今後複数のビルドを纏めてパッケージングする時に備えて別コマンドにしておく
     # Currently, there's no purpose to separating build and package,
@@ -1198,7 +1202,7 @@ def main():
             # Get source
             get_webrtc(source_dir, patch_dir, commit, args.target,
                        webrtc_source_dir=webrtc_source_dir,
-                       fetch=args.webrtc_fetch, force=args.webrtc_fetch_force)
+                       fetch=args.webrtc_fetch, force=args.webrtc_fetch_force, shallow=args.shallow)
 
             # ビルド
             # Build
