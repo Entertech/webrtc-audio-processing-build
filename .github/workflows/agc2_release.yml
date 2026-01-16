@@ -59,8 +59,8 @@ jobs:
       - id: parse-version
         run: |
           source build/VERSION
-          echo "webrtc_version=${WEBRTC_VERSION}" >> "$GITHUB_OUTPUT"
-          echo "prerelease_tag=${WEBRTC_VERSION}-pre" >> "$GITHUB_OUTPUT"
+          echo "webrtc_version=v${WEBRTC_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "prerelease_tag=v${WEBRTC_VERSION}-pre" >> "$GITHUB_OUTPUT"
           echo "release_tag=${WEBRTC_VERSION}" >> "$GITHUB_OUTPUT"
 
       - name: Download prerelease assets
