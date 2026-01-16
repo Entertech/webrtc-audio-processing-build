@@ -196,7 +196,7 @@ jobs:
             artifacts/webrtc.tar.gz
       - name: Update gradle.properties
         run: |
-          sed -i -e "s,VERSION_NAME=,VERSION_NAME=${{ needs.prepare.outputs.webrtc_version }},g" gradle.properties
+          sed -i -E "s/^(VERSION_NAME=).*/\1${{ needs.prepare.outputs.webrtc_version }}/" gradle.properties
       - name: Create PR
         uses: peter-evans/create-pull-request@v8
         with:
