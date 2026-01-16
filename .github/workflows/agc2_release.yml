@@ -96,7 +96,7 @@ jobs:
           sed -i -e "s,signing.secretKeyRingFile=,signing.secretKeyRingFile=${GITHUB_WORKSPACE}/release.gpg,g" "${GITHUB_WORKSPACE}/gradle.properties"
 
       - name: Publish AAR to Maven Central
-        run: ./gradlew publishAllPublicationsToMavenRepository
+        run: ./gradlew publishAllPublicationsToSonatypeRepository
 
       - name: Create release tag
         env:
