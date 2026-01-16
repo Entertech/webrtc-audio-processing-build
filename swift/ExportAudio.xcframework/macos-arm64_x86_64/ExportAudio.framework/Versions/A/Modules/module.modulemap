@@ -1,0 +1,6 @@
+framework module ExportAudio {
+  umbrella header "ExportAudio.h"
+
+  export *
+  module * { export * }
+}

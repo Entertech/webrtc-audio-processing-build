@@ -1,0 +1,127 @@
+name: release
+
+on:
+  pull_request:
+    types: [closed]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: read
+
+jobs:
+  pick-runner:
+    runs-on: ubuntu-slim
+    outputs:
+      runner: ${{ steps.pick-runner.outputs.runner }}
+    steps:
+      - name: Determine which runner to use
+        id: pick-runner
+        env:
+          RUNNER: ${{ vars.RUNNER }}
+        run: |
+          if [ -z "$RUNNER" ]; then
+            RUNNER="ubuntu-latest"
+          fi
+          echo "runner=$RUNNER" >> $GITHUB_OUTPUT
+
+  cleanup-prerelease:
+    if: >
+      github.event.pull_request.merged == false &&
+      contains(github.event.pull_request.labels.*.name, 'export-audio-release')
+    runs-on: ${{ fromJSON(needs.pick-runner.outputs.runner) }}
+    needs: pick-runner
+    steps:
+      - name: Delete prerelease for closed PR
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_BRANCH: ${{ github.event.pull_request.head.ref }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          version="${PR_BRANCH#release/v}"
+          tag="v${version}-pre"
+          if [ "$version" = "$PR_BRANCH" ]; then
+            echo "Branch name not in expected format; skipping prerelease deletion."
+            exit 0
+          fi
+          gh release delete "$tag" --cleanup-tag -y
+
+  release:
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      github.event.pull_request.merged == true &&
+      contains(github.event.pull_request.labels.*.name, 'export-audio-release')
+    runs-on: ${{ fromJSON(needs.pick-runner.outputs.runner) }}
+    needs: pick-runner
+    steps:
+      - uses: actions/checkout@v6
+      - id: parse-version
+        run: |
+          source build/VERSION
+          echo "webrtc_version=v${WEBRTC_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "prerelease_tag=v${WEBRTC_VERSION}-pre" >> "$GITHUB_OUTPUT"
+          echo "release_tag=${WEBRTC_VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Download prerelease assets
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PRERELEASE_TAG: ${{ steps.parse-version.outputs.prerelease_tag }}
+        run: |
+          gh release download "$PRERELEASE_TAG" --pattern "ExportAudio.xcframework.zip" --pattern "ExportAudio.xcframework.zip.checksum" --pattern "webrtc.tar.gz"
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: "temurin"
+          java-version: "21"
+
+      - uses: gradle/actions/setup-gradle@v5
+
+      - name: Configure Android
+        env:
+          NEXUS_USERNAME: ${{ vars.MAVEN_CENTRAL_USERNAME }}
+          NEXUS_PASSWORD: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
+          SIGNING_IN_KEY: ${{ secrets.SIGNING_IN_MEMORY_KEY }}
+          GPG_KEY_ID: ${{ secrets.SIGNING_IN_MEMORY_KEY_ID }}
+          GPG_PASSWORD: ${{ secrets.SIGNING_IN_MEMORY_KEY_PASSWORD }}
+        run: |
+          tar -xzf webrtc.tar.gz -C "${GITHUB_WORKSPACE}"
+          cp "${GITHUB_WORKSPACE}/webrtc/aar/libexport_audio.aar" "android/libexport_audio.aar"
+          printf '%s' "$SIGNING_IN_KEY" > "${GITHUB_WORKSPACE}/release.asc"
+          gpg --quiet --output "${GITHUB_WORKSPACE}/release.gpg" --dearmor "${GITHUB_WORKSPACE}/release.asc"
+          sed -i -e "s,nexusUsername=,nexusUsername=$NEXUS_USERNAME,g" "${GITHUB_WORKSPACE}/gradle.properties"
+          sed -i -e "s,nexusPassword=,nexusPassword=$NEXUS_PASSWORD,g" "${GITHUB_WORKSPACE}/gradle.properties"
+          sed -i -e "s,signing.keyId=,signing.keyId=$GPG_KEY_ID,g" "${GITHUB_WORKSPACE}/gradle.properties"
+          sed -i -e "s,signing.password=,signing.password=$GPG_PASSWORD,g" "${GITHUB_WORKSPACE}/gradle.properties"
+          sed -i -e "s,signing.secretKeyRingFile=,signing.secretKeyRingFile=${GITHUB_WORKSPACE}/release.gpg,g" "${GITHUB_WORKSPACE}/gradle.properties"
+
+      - name: Publish AAR to Maven Central
+        run: ./gradlew publishAllPublicationsToSonatypeRepository closeSonatypeStagingRepository -Dorg.gradle.parallel=false
+
+      - name: Create release tag
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ steps.parse-version.outputs.release_tag }}
+        run: |
+          git tag "$RELEASE_TAG"
+          git push origin "$RELEASE_TAG"
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ steps.parse-version.outputs.release_tag }}
+          name: ${{ steps.parse-version.outputs.release_tag }}
+          prerelease: false
+          files: |
+            ExportAudio.xcframework.zip
+            ExportAudio.xcframework.zip.checksum
+            android/libexport_audio.aar
+
+      - name: Delete prerelease
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PRERELEASE_TAG: ${{ steps.parse-version.outputs.prerelease_tag }}
+        run: |
+          gh release delete "$PRERELEASE_TAG" --cleanup-tag -y

@@ -1,0 +1,215 @@
+name: export-audio-prerelease
+
+on:
+  workflow_dispatch:
+    inputs:
+      commitHash:
+        description: "webrtc-audio-processing commit hash (leave empty for default branch HEAD)"
+        default: ""
+        required: false
+      version:
+        description: "release version (optional, default: current + 1)"
+        default: ""
+        required: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  pick-runner:
+    runs-on: ubuntu-slim
+    outputs:
+      runner: ${{ steps.pick-runner.outputs.runner }}
+      macos-runner: ${{ steps.pick-runner.outputs.macos-runner }}
+    steps:
+      - name: Determine which runner to use
+        id: pick-runner
+        env:
+          RUNNER: ${{ vars.RUNNER }}
+          MACOS_RUNNER: ${{ vars.MACOS_RUNNER }}
+        run: |
+          if [ -z "$RUNNER" ]; then
+            RUNNER="ubuntu-latest"
+          fi
+          if [ -z "$MACOS_RUNNER" ]; then
+            MACOS_RUNNER="macos-latest"
+          fi
+          echo "runner=$RUNNER" >> $GITHUB_OUTPUT
+          echo "macos-runner=$MACOS_RUNNER" >> $GITHUB_OUTPUT
+
+  prepare:
+    needs: pick-runner
+    runs-on: ${{ fromJSON(needs.pick-runner.outputs.runner) }}
+    outputs:
+      commit: ${{ steps.version.outputs.commit }}
+      webrtc_version: ${{ steps.version.outputs.webrtc_version }}
+      prerelease_tag: ${{ steps.version.outputs.prerelease_tag }}
+      release_tag: ${{ steps.version.outputs.release_tag }}
+    steps:
+      - uses: actions/checkout@v6
+      - id: version
+        run: |
+          set -euo pipefail
+          if [ -n "${{ github.event.inputs.commitHash }}" ]; then
+            commit="${{ github.event.inputs.commitHash }}"
+          else
+            commit="$(git ls-remote https://github.com/Entertech/webrtc-audio-processing HEAD | awk '{print $1}')"
+          fi
+          EXPORT_AUDIO_COMMIT="$commit" EXPORT_AUDIO_VERSION="${{ github.event.inputs.version }}" python3 - <<'PY'
+          import os
+          from pathlib import Path
+          path = Path("build/VERSION")
+          data = {}
+          for line in path.read_text().splitlines():
+            if not line.strip():
+              continue
+            key, val = line.split("=", 1)
+            data[key] = val
+          webrtc_version = data["WEBRTC_VERSION"]
+          override_version = os.environ.get("EXPORT_AUDIO_VERSION", "").strip()
+          if override_version:
+            new_webrtc_version = override_version
+          else:
+            parts = webrtc_version.split(".")
+            parts[-1] = str(int(parts[-1]) + 1)
+            new_webrtc_version = ".".join(parts)
+          new_build_version = f"{new_webrtc_version}.0"
+          commit = os.environ["EXPORT_AUDIO_COMMIT"]
+          parts = new_webrtc_version.split(".")
+          readable_version = f"M{parts[0]}.{parts[1]}@{{#{parts[2]}}}"
+          print(f"commit={commit}")
+          print(f"build_version={new_build_version}")
+          print(f"webrtc_version={new_webrtc_version}")
+          print(f"prerelease_tag=v{new_webrtc_version}-pre")
+          print(f"release_tag=v{new_webrtc_version}")
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as f:
+            f.write(f"commit={commit}\n")
+            f.write(f"webrtc_version={new_webrtc_version}\n")
+            f.write(f"prerelease_tag=v{new_webrtc_version}-pre\n")
+            f.write(f"release_tag=v{new_webrtc_version}\n")
+          with path.open("w", encoding="utf-8") as f:
+            f.write(f"WEBRTC_BUILD_VERSION={new_build_version}\n")
+            f.write(f"WEBRTC_VERSION={new_webrtc_version}\n")
+            f.write(f"WEBRTC_READABLE_VERSION={readable_version}\n")
+            f.write(f"WEBRTC_COMMIT={commit}\n")
+          PY
+      - name: Upload VERSION artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: version-file
+          path: build/VERSION
+
+  build-apple:
+    runs-on: ${{ fromJSON(needs.pick-runner.outputs.macos-runner) }}
+    needs: [pick-runner, prepare]
+    defaults:
+      run:
+        working-directory: ./build
+    steps:
+      - uses: actions/checkout@v6
+      - name: Cache depot tools
+        uses: actions/cache@v5
+        with:
+          path: |
+            build/_source/apple_export_audio/depot_tools
+          key: depot-tools
+      - name: Download VERSION artifact
+        uses: actions/download-artifact@v7
+        with:
+          name: version-file
+          path: build
+      - name: Build Apple Export Audio
+        run: ./build.apple_export_audio.sh
+      - name: Create checksum
+        run: |
+          cd _package/apple_export_audio
+          swift package compute-checksum ExportAudio.xcframework.zip > ExportAudio.xcframework.zip.checksum
+      - name: Upload Apple artifacts
+        uses: actions/upload-artifact@v6
+        with:
+          name: apple_export_audio
+          path: |
+            build/_package/apple_export_audio/ExportAudio.xcframework.zip
+            build/_package/apple_export_audio/ExportAudio.xcframework.zip.checksum
+
+  build-android:
+    runs-on: ${{ fromJSON(needs.pick-runner.outputs.runner) }}
+    needs: [pick-runner, prepare]
+    defaults:
+      run:
+        working-directory: ./build
+    steps:
+      - uses: actions/checkout@v6
+      - name: Cache depot tools
+        uses: actions/cache@v5
+        with:
+          path: |
+            build/_source/android_export_audio/depot_tools
+          key: depot-tools
+      - name: Download VERSION artifact
+        uses: actions/download-artifact@v7
+        with:
+          name: version-file
+          path: build
+      - name: Build Export Audio Android
+        run: ./build.android_export_audio_direct.sh
+      - name: Upload Android artifacts
+        uses: actions/upload-artifact@v6
+        with:
+          name: android_export_audio
+          path: build/_package/android_export_audio/webrtc.tar.gz
+
+  prerelease:
+    runs-on: ${{ fromJSON(needs.pick-runner.outputs.runner) }}
+    needs: [pick-runner, prepare, build-apple, build-android]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/download-artifact@v7
+        with:
+          name: apple_export_audio
+          path: artifacts
+      - uses: actions/download-artifact@v7
+        with:
+          name: android_export_audio
+          path: artifacts
+      - name: Download VERSION artifact
+        uses: actions/download-artifact@v7
+        with:
+          name: version-file
+          path: build
+      - name: Extract xcframework to swift folder
+        run: |
+          rm -rf swift/ExportAudio.xcframework
+          unzip -q artifacts/ExportAudio.xcframework.zip -d swift/
+      - name: Create prerelease
+        uses: softprops/action-gh-release@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ needs.prepare.outputs.prerelease_tag }}
+          name: ${{ needs.prepare.outputs.prerelease_tag }}
+          prerelease: true
+          files: |
+            artifacts/ExportAudio.xcframework.zip
+            artifacts/ExportAudio.xcframework.zip.checksum
+            artifacts/webrtc.tar.gz
+      - name: Update gradle.properties
+        run: |
+          sed -i -E "s/^(VERSION_NAME=).*/\1${{ needs.prepare.outputs.webrtc_version }}/" gradle.properties
+      - name: Create PR
+        uses: peter-evans/create-pull-request@v8
+        with:
+          add-paths: |
+            swift/ExportAudio.xcframework
+            build/VERSION
+            gradle.properties
+          branch: release/v${{ needs.prepare.outputs.webrtc_version }}
+          title: "Release v${{ needs.prepare.outputs.webrtc_version }}"
+          body: |
+            - Update build/VERSION for Export Audio artifacts
+            - Update swift/ExportAudio.xcframework
+            - Update gradle.properties
+          labels: |
+            export-audio-release
+          commit-message: "Release v${{ needs.prepare.outputs.webrtc_version }}"
