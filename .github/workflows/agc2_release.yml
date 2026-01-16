@@ -88,6 +88,7 @@ jobs:
           tar -xzf webrtc.tar.gz -C "${GITHUB_WORKSPACE}"
           cp "${GITHUB_WORKSPACE}/webrtc/aar/libexport_audio.aar" "android/libexport_audio.aar"
           echo $SIGNING_IN_KEY > "${GITHUB_WORKSPACE}/release.asc"
+          cat "${GITHUB_WORKSPACE}/release.asc"
           gpg --quiet --output "${GITHUB_WORKSPACE}/release.gpg" --dearmor "${GITHUB_WORKSPACE}/release.asc"
           sed -i -e "s,nexusUsername=,nexusUsername=$NEXUS_USERNAME,g" "${GITHUB_WORKSPACE}/gradle.properties"
           sed -i -e "s,nexusPassword=,nexusPassword=$NEXUS_PASSWORD,g" "${GITHUB_WORKSPACE}/gradle.properties"
