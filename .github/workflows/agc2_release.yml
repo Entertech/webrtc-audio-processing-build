@@ -3,6 +3,7 @@ name: release
 on:
   pull_request:
     types: [closed]
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -48,6 +49,7 @@ jobs:
 
   release:
     if: >
+      github.event_name == 'workflow_dispatch' ||
       github.event.pull_request.merged == true &&
       contains(github.event.pull_request.labels.*.name, 'export-audio-release')
     runs-on: ${{ fromJSON(needs.pick-runner.outputs.runner) }}
@@ -64,6 +66,7 @@ jobs:
       - name: Download prerelease assets
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PRERELEASE_TAG: ${{ steps.parse-version.outputs.prerelease_tag }}
         run: |
           gh release download "$PRERELEASE_TAG" --pattern "ExportAudio.xcframework.zip" --pattern "ExportAudio.xcframework.zip.checksum" --pattern "webrtc.tar.gz"
 
@@ -97,6 +100,7 @@ jobs:
 
       - name: Create release tag
         env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_TAG: ${{ steps.parse-version.outputs.release_tag }}
         run: |
           git tag "$RELEASE_TAG"
