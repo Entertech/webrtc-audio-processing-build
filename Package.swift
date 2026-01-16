@@ -16,8 +16,7 @@ let package = Package(
     targets: [
         .binaryTarget(
             name: "WebRTCAudio",
-            url: "https://github.com/Entertech/webrtc-audio-processing-build/releases/download/v137.7151.11/ExportAudio.xcframework.zip",
-            checksum: "fe3e507881e701a870829c64b1afff4801967a3a32a0cadf96ca878110f7c2ff"
+            path: "swift/ExportAudio.xcframework"
         )
     ]
 )
