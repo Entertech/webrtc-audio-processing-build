@@ -1,4 +1,4 @@
-name: agc2-release
+name: release
 
 on:
   pull_request:
@@ -27,7 +27,7 @@ jobs:
   cleanup-prerelease:
     if: >
       github.event.pull_request.merged == false &&
-      contains(github.event.pull_request.labels.*.name, 'agc2-release')
+      contains(github.event.pull_request.labels.*.name, 'export-audio-release')
     runs-on: ${{ fromJSON(needs.pick-runner.outputs.runner) }}
     needs: pick-runner
     steps:
@@ -49,70 +49,75 @@ jobs:
   release:
     if: >
       github.event.pull_request.merged == true &&
-      contains(github.event.pull_request.labels.*.name, 'agc2-release')
+      contains(github.event.pull_request.labels.*.name, 'export-audio-release')
     runs-on: ${{ fromJSON(needs.pick-runner.outputs.runner) }}
     needs: pick-runner
     steps:
       - uses: actions/checkout@v6
-      - id: version
+      - id: parse-version
         run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          path = Path("build/VERSION")
-          data = {}
-          for line in path.read_text().splitlines():
-            if not line.strip():
-              continue
-            key, val = line.split("=", 1)
-            data[key] = val
-          build_version = data["WEBRTC_BUILD_VERSION"]
-          webrtc_version = data["WEBRTC_VERSION"]
-          with open(Path("version.env"), "w", encoding="utf-8") as f:
-            f.write(f"BUILD_VERSION={build_version}\n")
-            f.write(f"WEBRTC_VERSION={webrtc_version}\n")
-            f.write(f"PRERELEASE_TAG=v{webrtc_version}-pre\n")
-            f.write(f"RELEASE_TAG=v{webrtc_version}\n")
-          PY
-          cat version.env >> "$GITHUB_ENV"
+          source build/VERSION
+          echo "webrtc_version=${WEBRTC_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "prerelease_tag=${WEBRTC_VERSION}-pre" >> "$GITHUB_OUTPUT"
+          echo "release_tag=${WEBRTC_VERSION}" >> "$GITHUB_OUTPUT"
+
       - name: Download prerelease assets
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release download "$PRERELEASE_TAG" --pattern "AGC2Capi.xcframework.zip" --pattern "AGC2Capi.xcframework.zip.checksum" --pattern "agc2capi.aar"
+          gh release download "$PRERELEASE_TAG" --pattern "ExportAudio.xcframework.zip" --pattern "ExportAudio.xcframework.zip.checksum" --pattern "webrtc.tar.gz"
+
       - uses: actions/setup-java@v5
         with:
           distribution: "temurin"
           java-version: "21"
+
       - uses: gradle/actions/setup-gradle@v5
-      - name: Publish AAR to Maven Central
+
+      - name: Configure Android
         env:
-          ORG_GRADLE_PROJECT_mavenCentralUsername: ${{ vars.MAVEN_CENTRAL_USERNAME }}
-          ORG_GRADLE_PROJECT_mavenCentralPassword: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
-          ORG_GRADLE_PROJECT_signingInMemoryKey: ${{ secrets.SIGNING_IN_MEMORY_KEY }}
-          ORG_GRADLE_PROJECT_signingInMemoryKeyId: ${{ secrets.SIGNING_IN_MEMORY_KEY_ID }}
-          ORG_GRADLE_PROJECT_signingInMemoryKeyPassword: ${{ secrets.SIGNING_IN_MEMORY_KEY_PASSWORD }}
+          NEXUS_USERNAME: ${{ vars.MAVEN_CENTRAL_USERNAME }}
+          NEXUS_PASSWORD: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
+          SIGNING_IN_KEY: ${{ secrets.SIGNING_IN_MEMORY_KEY }}
+          GPG_KEY_ID: ${{ secrets.SIGNING_IN_MEMORY_KEY_ID }}
+          GPG_PASSWORD: ${{ secrets.SIGNING_IN_MEMORY_KEY_PASSWORD }}
         run: |
-          AGC2_VERSION="${WEBRTC_VERSION}" \
-          AGC2_AAR_PATH="${GITHUB_WORKSPACE}/agc2capi.aar" \
-          gradle -p maven publishToMavenCentral
+          tar -xzf webrtc.tar.gz -C "${GITHUB_WORKSPACE}"
+          cp "${GITHUB_WORKSPACE}/webrtc/aar/libexport_audio.aar" "android/libexport_audio.aar"
+          echo $SIGNING_IN_KEY > "${GITHUB_WORKSPACE}/release.asc"
+          gpg --quiet --output "${GITHUB_WORKSPACE}/release.gpg" --dearmor "${GITHUB_WORKSPACE}/release.asc"
+          sed -i -e "s,nexusUsername=,nexusUsername=$NEXUS_USERNAME,g" "${GITHUB_WORKSPACE}/gradle.properties"
+          sed -i -e "s,nexusPassword=,nexusPassword=$NEXUS_PASSWORD,g" "${GITHUB_WORKSPACE}/gradle.properties"
+          sed -i -e "s,signing.keyId=,signing.keyId=$GPG_KEY_ID,g" "${GITHUB_WORKSPACE}/gradle.properties"
+          sed -i -e "s,signing.password=,signing.password=$GPG_PASSWORD,g" "${GITHUB_WORKSPACE}/gradle.properties"
+          sed -i -e "s,signing.secretKeyRingFile=,signing.secretKeyRingFile=${GITHUB_WORKSPACE}/release.gpg,g" "${GITHUB_WORKSPACE}/gradle.properties"
+
+      - name: Publish AAR to Maven Central
+        run: ./gradlew publishAllPublicationsToMavenRepository
+
       - name: Create release tag
+        env:
+          RELEASE_TAG: ${{ steps.parse-version.outputs.release_tag }}
         run: |
           git tag "$RELEASE_TAG"
           git push origin "$RELEASE_TAG"
+
       - name: Publish release
         uses: softprops/action-gh-release@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tag_name: ${{ env.RELEASE_TAG }}
-          name: ${{ env.RELEASE_TAG }}
+          tag_name: ${{ steps.parse-version.outputs.release_tag }}
+          name: ${{ steps.parse-version.outputs.release_tag }}
           prerelease: false
           files: |
-            AGC2Capi.xcframework.zip
-            AGC2Capi.xcframework.zip.checksum
-            agc2capi.aar
+            ExportAudio.xcframework.zip
+            ExportAudio.xcframework.zip.checksum
+            android/libexport_audio.aar
+
       - name: Delete prerelease
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PRERELEASE_TAG: ${{ steps.parse-version.outputs.prerelease_tag }}
         run: |
           gh release delete "$PRERELEASE_TAG" --cleanup-tag -y

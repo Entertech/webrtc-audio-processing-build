@@ -1,0 +1,36 @@
+Subject: [PATCH] add: support dynamic lib
+---
+Index: tools_webrtc/ios/generate_umbrella_header.py
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/tools_webrtc/ios/generate_umbrella_header.py b/tools_webrtc/ios/generate_umbrella_header.py
+--- a/tools_webrtc/ios/generate_umbrella_header.py	(revision 0451909ebb1ab76485cf263784e8ca42dbcc84dc)
++++ b/tools_webrtc/ios/generate_umbrella_header.py	(date 1768380650527)
+@@ -41,7 +41,7 @@
+      */\n\n""" % datetime.datetime.now().year))
+
+     for s in args.sources:
+-      outfile.write("#import <WebRTC/{}>\n".format(os.path.basename(s)))
++      outfile.write("#import <ExportAudio/{}>\n".format(os.path.basename(s)))
+
+   return 0
+
+Index: tools_webrtc/apple/copy_framework_header.py
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/tools_webrtc/apple/copy_framework_header.py b/tools_webrtc/apple/copy_framework_header.py
+--- a/tools_webrtc/apple/copy_framework_header.py	(revision 0451909ebb1ab76485cf263784e8ca42dbcc84dc)
++++ b/tools_webrtc/apple/copy_framework_header.py	(date 1768380650537)
+@@ -20,7 +20,7 @@
+   if not match:
+     return line
+
+-  return '%s#import <WebRTC/%sRTC%s.h>%s' % (match.group(1), match.group(3),
++  return '%s#import <ExportAudio/%sRTC%s.h>%s' % (match.group(1), match.group(3),
+                                              match.group(4), match.group(5))
+
+
