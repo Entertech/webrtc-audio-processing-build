@@ -7,7 +7,7 @@ SCRIPT_DIR="`pwd`"
 PACKAGE_NAME=android_export_audio
 COMMIT="${1:-}"
 
-./scripts/apt_install_x86_64.sh \
+sudo ./scripts/apt_install_x86_64.sh \
   && sudo apt-get install -y openjdk-11-jdk \
   && sudo apt-get install -y build-essential
 
